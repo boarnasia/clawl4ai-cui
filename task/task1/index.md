@@ -6,15 +6,22 @@
 
 `python main.py <url>`
 
-- url: スクレイピングしたいURL
+- url: スクレイピングしたいURL（起点ページ）
+
+### クロール動作
+
+- 指定 URL を起点に、**同一 URL プレフィックス配下**のページを再帰的（BFS）に全取得する
+- 例: `https://code.claude.com/docs/en/` を指定すると `https://code.claude.com/docs/en/` 以下のページをすべて取得する
+- 外部ドメインへのリンクは辿らない
+- 取得済みページは再訪問しない
 
 ### output
 
-`download` ディレクトリに結果を保存する
+`download` ディレクトリに **起点URLごとに1ファイル** 保存する
 
 #### `url` が `https://code.claude.com/docs/en/` のケース
 
-ファイル名: `code.claude.com_docs_en--Claude_Code_overview_-_Claude_Code_Docs.md`
+ファイル名: `code.claude.com_docs_en.md`
 
 変換ルール（URLパート）
 
@@ -27,14 +34,13 @@
 
 変換ルール（ファイル名全体）
 
-- url と ページタイトル の間は `--` で区切る
-- ページタイトルにも同様の文字変換を適用する
+- URL変換後の文字列をそのままファイル名に使う
 - 拡張子は `.md`
 - 同一URLを再度スクレイプした場合は上書き保存する
 
 ファイル内容
 
-- crawl4ai が生成した Markdown をそのまま保存する（メタデータ等は付加しない）
+- crawl4ai が生成した Markdown を複数ページ分マージして保存する（各ページ本文は `<!-- source: ... -->` 区切りで連結）
 
 ### 副作用
 
@@ -59,7 +65,7 @@
 
 - 標準出力に1行1レコードで出力する
 - 出力フォーマット: `<scraped_at>\t<url>\t<file_path>`
-- 例: `2026-04-29T10:00:00Z	https://code.claude.com/docs/en/	code.claude.com_docs_en--Claude_Code_overview_-_Claude_Code_Docs.md`
+- 例: `2026-04-29T10:00:00Z	https://code.claude.com/docs/en/	code.claude.com_docs_en.md`
 - ソート順: `scraped_at` 昇順
 - フィルタリングは grep などで行うので不要
 
@@ -113,7 +119,8 @@
 | `command_start`                 | INFO    | `command`, `args`（コマンドライン引数）        |
 | `command_end`                   | INFO    | `command`, `elapsed_sec`, `exit_code`         |
 | `scrape_start`                  | INFO    | `url`                                         |
-| `scrape_success`                | INFO    | `url`, `file_path`, `elapsed_sec`             |
+| `scrape_success`                | INFO    | `url`, `elapsed_sec`                          |
+| `merge_saved`                   | INFO    | `url`, `file_path`, `pages`                   |
 | `scrape_empty`                  | WARNING | `url`                                         |
 | `scrape_failed`                 | ERROR   | `url`, `error`                                |
 | `db_insert`                     | INFO    | `url`, `file_path`                            |
@@ -130,9 +137,10 @@
 ```json
 {"timestamp": "2026-04-29T10:00:00.123Z", "level": "info", "event": "command_start", "command": "scrape", "args": ["https://code.claude.com/docs/en/"]}
 {"timestamp": "2026-04-29T10:00:00.124Z", "level": "info", "event": "scrape_start", "command": "scrape", "url": "https://code.claude.com/docs/en/"}
-{"timestamp": "2026-04-29T10:00:02.456Z", "level": "info", "event": "scrape_success", "command": "scrape", "url": "https://code.claude.com/docs/en/", "file_path": "code.claude.com_docs_en--Claude_Code_overview.md", "elapsed_sec": 2.332}
-{"timestamp": "2026-04-29T10:00:02.460Z", "level": "info", "event": "db_insert", "command": "scrape", "url": "https://code.claude.com/docs/en/", "file_path": "code.claude.com_docs_en--Claude_Code_overview.md"}
-{"timestamp": "2026-04-29T10:00:02.461Z", "level": "info", "event": "command_end", "command": "scrape", "elapsed_sec": 2.337, "exit_code": 0}
+{"timestamp": "2026-04-29T10:00:02.456Z", "level": "info", "event": "scrape_success", "command": "scrape", "url": "https://code.claude.com/docs/en/quickstart", "elapsed_sec": 2.332}
+{"timestamp": "2026-04-29T10:00:02.900Z", "level": "info", "event": "merge_saved", "command": "scrape", "url": "https://code.claude.com/docs/en/", "file_path": "code.claude.com_docs_en.md", "pages": 12}
+{"timestamp": "2026-04-29T10:00:02.910Z", "level": "info", "event": "db_insert", "command": "scrape", "url": "https://code.claude.com/docs/en/", "file_path": "code.claude.com_docs_en.md"}
+{"timestamp": "2026-04-29T10:00:02.911Z", "level": "info", "event": "command_end", "command": "scrape", "elapsed_sec": 2.337, "exit_code": 0}
 ```
 
 ### エラーハンドリング

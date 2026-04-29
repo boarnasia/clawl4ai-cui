@@ -5,6 +5,7 @@ from pathlib import Path
 
 import db
 import logger as logger_mod
+import merger
 import scraper
 
 USAGE = """\
@@ -31,13 +32,25 @@ def cmd_list(log) -> None:
 
 
 async def cmd_scrape(url: str, command: str, log) -> None:
-    filename = await scraper.scrape(url, command, log)
-    if filename is False:
+    if not await _scrape_one(url, command, log):
         _exit_error(f"failed to scrape {url}")
+
+
+async def _scrape_one(url: str, command: str, log) -> bool:
+    pages = await scraper.scrape(url, command, log)
+    if pages is False:
+        return False
+
+    merged = merger.merge(pages)
+    filename = scraper.build_merged_filename(url)
+    Path("download").mkdir(exist_ok=True)
+    Path(f"download/{filename}").write_text(merged, encoding="utf-8")
+    log.info("merge_saved", command=command, url=url, file_path=filename, pages=len(pages))
 
     action = db.upsert(url, filename)
     event = "db_insert" if action == "inserted" else "db_upsert"
     log.info(event, command=command, url=url, file_path=filename)
+    return True
 
 
 async def cmd_update(args: list[str], log) -> None:
@@ -46,11 +59,12 @@ async def cmd_update(args: list[str], log) -> None:
         if not db.get_by_url(url):
             log.error("url_not_found", command="update", url=url)
             _exit_error(f"URL not found in DB: {url}")
-        await cmd_scrape(url, "update", log)
+        if not await _scrape_one(url, "update", log):
+            _exit_error(f"failed to scrape {url}")
     else:
         rows = db.list_all()
         for _, url, _ in rows:
-            await cmd_scrape(url, "update", log)
+            await _scrape_one(url, "update", log)
 
 
 def cmd_delete(args: list[str], log) -> None:

@@ -1,9 +1,10 @@
 import re
 import time
-from pathlib import Path
 
 import structlog
-from crawl4ai import AsyncWebCrawler
+from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
+from crawl4ai.deep_crawling import BFSDeepCrawlStrategy
+from crawl4ai.deep_crawling.filters import FilterChain, URLPatternFilter
 
 _INVALID_CHARS = re.compile(r'[/\s?#&=*"<>|\\:]')
 
@@ -12,34 +13,55 @@ def _sanitize(s: str) -> str:
     return _INVALID_CHARS.sub("_", s)
 
 
-def build_filename(url: str, title: str) -> str:
+def build_merged_filename(url: str) -> str:
     bare = re.sub(r"^https?://", "", url).rstrip("/")
-    url_part = _sanitize(bare)
-    title_part = _sanitize(title)
-    return f"{url_part}--{title_part}.md"
+    return _sanitize(bare) + ".md"
 
 
-async def scrape(url: str, command: str, log: structlog.stdlib.BoundLogger) -> bool:
-    Path("download").mkdir(exist_ok=True)
+async def scrape(
+    url: str, command: str, log: structlog.stdlib.BoundLogger
+) -> list[tuple[str, str]] | bool:
+    """
+    Recursively crawl all pages under `url` (same prefix, no external links).
+    Returns list of (page_url, markdown_text), or False on failure.
+    """
     log.info("scrape_start", command=command, url=url)
     start = time.monotonic()
 
+    prefix_pattern = url.rstrip("/") + "/*"
+    strategy = BFSDeepCrawlStrategy(
+        max_depth=10,
+        filter_chain=FilterChain([URLPatternFilter(prefix_pattern)]),
+        include_external=False,
+    )
+    config = CrawlerRunConfig(deep_crawl_strategy=strategy)
+
     try:
         async with AsyncWebCrawler() as crawler:
-            result = await crawler.arun(url=url)
+            results = await crawler.arun(url=url, config=config)
     except Exception as e:
         log.error("scrape_failed", command=command, url=url, error=str(e))
         return False
 
-    markdown = getattr(result.markdown, "raw_markdown", None) or str(result.markdown or "")
-    if not markdown.strip():
+    if not results:
         log.warning("scrape_empty", command=command, url=url)
         return False
 
-    title = (result.metadata or {}).get("title") or "untitled"
-    filename = build_filename(url, title)
-    Path(f"download/{filename}").write_text(markdown, encoding="utf-8")
+    pages = []
+    for result in results:
+        if not result.success:
+            continue
+        markdown = getattr(result.markdown, "raw_markdown", None) or str(result.markdown or "")
+        if not markdown.strip():
+            continue
+        elapsed = round(time.monotonic() - start, 3)
+        log.info("scrape_success", command=command, url=result.url, elapsed_sec=elapsed)
+        pages.append((result.url, markdown))
 
-    elapsed = round(time.monotonic() - start, 3)
-    log.info("scrape_success", command=command, url=url, file_path=filename, elapsed_sec=elapsed)
-    return filename
+    if not pages:
+        log.warning("scrape_empty", command=command, url=url)
+        return False
+
+    log.info("scrape_complete", command=command, start_url=url, pages=len(pages),
+             elapsed_sec=round(time.monotonic() - start, 3))
+    return pages
